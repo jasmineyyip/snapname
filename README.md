@@ -27,10 +27,10 @@ Environment variables (optional unless noted). You can put them in a `.env` file
 | Variable | Purpose |
 |----------|---------|
 | `SNAPNAME_SCREENSHOTS_DIR` | Folder to watch. Default: `~/Desktop`. Must exist. |
-| `ANTHROPIC_API_KEY` | Anthropic API key (required once vision naming exists). |
+| `ANTHROPIC_API_KEY` | Anthropic API key. Required to compute a name from image content (e.g. once renaming is enabled). |
 | `SNAPNAME_MODEL` | Vision model id. Default: `claude-sonnet-4-20250514`. |
-| `SNAPNAME_FILENAME_PREFIX` | Optional prefix for generated filenames (later). |
-| `SNAPNAME_FILENAME_SUFFIX` | Optional suffix before the extension (later). |
+| `SNAPNAME_FILENAME_PREFIX` | Optional string prepended to the generated slug (sanitized with the slug). |
+| `SNAPNAME_FILENAME_SUFFIX` | Optional string appended before the file extension (sanitized with the slug). |
 | `SNAPNAME_POLLING` | If `1` / `true` / `yes` / `on`, use a polling watcher instead of native FSEvents (higher CPU; useful if FSEvents fails). |
 
 ## macOS screenshots
@@ -39,4 +39,13 @@ By default, macOS often saves captures to **Desktop** (`~/Desktop`). Snapname us
 
 ## API key
 
-Vision-based naming will call the Anthropic API. Set `ANTHROPIC_API_KEY` in `.env` before using that feature. Do not commit `.env`.
+Naming from image content uses the **Anthropic Messages API** (the image bytes are sent to the model). Set `ANTHROPIC_API_KEY` in `.env` for that path. Do not commit `.env`.
+
+### Naming API (for scripts / next steps)
+
+The package exposes helpers in `snapname.naming`:
+
+- `describe_image_slug(settings, path)` — vision call → sanitized slug (no extension).
+- `propose_new_path(settings, path)` — slug + prefix/suffix + collision handling → a **new** `Path` in the same folder with the same extension as `path` (the file is not renamed until you `path.rename(target)` yourself; wiring that into the watcher is the next step).
+
+Both raise `NamingError` if the key is missing, the path is not a supported image, or the API errors.

@@ -10,13 +10,7 @@ from watchdog.observers import Observer
 from watchdog.observers.api import BaseObserver
 from watchdog.observers.polling import PollingObserver
 
-IMAGE_SUFFIXES = frozenset(
-    {".png", ".jpg", ".jpeg", ".webp", ".gif", ".heic", ".tiff", ".tif"}
-)
-
-
-def is_image_path(path: Path) -> bool:
-    return path.suffix.lower() in IMAGE_SUFFIXES
+from snapname.images import is_image_path
 
 
 def wait_until_stable(
