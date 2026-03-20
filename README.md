@@ -16,12 +16,24 @@ pip install -r requirements.txt
 python -m snapname
 ```
 
-You should see: `ready`
+You should see `ready` and a line showing the resolved screenshots folder (default: `~/Desktop`).
+
+## Configuration
+
+Environment variables (optional unless noted). You can put them in a `.env` file in the repo root; copy `.env.example` to `.env`.
+
+| Variable | Purpose |
+|----------|---------|
+| `SNAPNAME_SCREENSHOTS_DIR` | Folder to watch. Default: `~/Desktop`. Must exist. |
+| `ANTHROPIC_API_KEY` | Anthropic API key (required once vision naming exists). |
+| `SNAPNAME_MODEL` | Vision model id. Default: `claude-sonnet-4-20250514`. |
+| `SNAPNAME_FILENAME_PREFIX` | Optional prefix for generated filenames (later). |
+| `SNAPNAME_FILENAME_SUFFIX` | Optional suffix before the extension (later). |
 
 ## macOS screenshots
 
-By default, macOS often saves captures to **Desktop** (`~/Desktop`). This project will use that path unless you override it in configuration (added later).
+By default, macOS often saves captures to **Desktop** (`~/Desktop`). Snapname uses that path unless you set `SNAPNAME_SCREENSHOTS_DIR`.
 
 ## API key
 
-Vision-based naming will call the Anthropic API. When that lands, copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`. Do not commit `.env`.
+Vision-based naming will call the Anthropic API. Set `ANTHROPIC_API_KEY` in `.env` before using that feature. Do not commit `.env`.

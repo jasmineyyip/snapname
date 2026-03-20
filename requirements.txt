@@ -1,1 +1,2 @@
-# Dependencies added in later commits (watchdog, anthropic, etc.)
+python-dotenv>=1.0.0
+# watchdog, anthropic, etc. — later commits
