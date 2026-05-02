@@ -8,13 +8,34 @@ This application watches your screenshots folder, sends each new capture to a vi
 
 ## Setup
 
+From the **repository root** (the folder that contains `snapname/` and `pyproject.toml`):
+
 ```bash
-cd snapname
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python -m snapname
 ```
+
+### Editable install and `snapname` on your PATH
+
+Same venv, from the repository root:
+
+```bash
+pip install -e ".[dev]"
+```
+
+That installs the package in editable mode, pulls dev extras (pytest), and adds a **`snapname`** executable next to `python` in the venv (`which snapname` should print something under `.venv/bin/`). Activate the venv in any terminal session where you want that command.
+
+To run without activating the venv: `.venv/bin/snapname`.
+
+### Smoke test (real screenshot + API key)
+
+1. Copy `.env.example` to `.env` and set **`ANTHROPIC_API_KEY`** (and optionally `SNAPNAME_SCREENSHOTS_DIR` if not using Desktop).
+2. Start the watcher: `python -m snapname` or `snapname` after `pip install -e .`.
+3. Confirm you see `ready`, the watched folder, then `watching…`.
+4. Take a **new** macOS screenshot (⌘⇧3 or ⌘⇧4) so the file name starts with **`Screenshot`** (unless you set `SNAPNAME_ONLY_SCREENSHOT_PREFIX=0`).
+5. Within a short wait, you should see **`renamed: /old/path -> /new/path`** and the file renamed on disk. If nothing happens, check **stderr** for API or permission errors.
 
 Run stays in the foreground: it prints `ready`, the resolved folder, then `watching…`. When a **new macOS-style screenshot** appears (filename starts with `Screenshot` by default), it waits until the file size stops changing, asks the model for a short slug, then **renames** the file in place. It logs `renamed: /old/path -> /new/path` on success, or a message on **stderr** if the API key is missing, the API errors, or the rename fails. Stop with **Ctrl+C**.
 
