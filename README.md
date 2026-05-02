@@ -37,6 +37,23 @@ To run without activating the venv: `.venv/bin/snapname`.
 4. Take a **new** macOS screenshot (⌘⇧3 or ⌘⇧4) so the file name starts with **`Screenshot`** (unless you set `SNAPNAME_ONLY_SCREENSHOT_PREFIX=0`).
 5. Within a short wait, you should see **`renamed: /old/path -> /new/path`** and the file renamed on disk. If nothing happens, check **stderr** for API or permission errors.
 
+### Run in the background (macOS Launch Agent)
+
+Use a **Launch Agent** so Snapname starts at login and keeps running without an open terminal.
+
+1. From the repo root, create the venv, `pip install -e .`, and put **`ANTHROPIC_API_KEY`** (and any other vars) in **`.env`** as usual. Snapname loads `.env` from the repository root next to `pyproject.toml`.
+2. Copy `launchd/com.snapname.watcher.example.plist` to `~/Library/LaunchAgents/com.snapname.watcher.plist`.
+3. Edit that plist and replace **every** `/ABSOLUTE/PATH/TO/snapname-repo` with the **real** absolute path to your clone (the folder that contains `.venv` and `snapname/`).
+4. Load the agent (run once per machine after installing or editing the plist). If you loaded it before and changed the plist, **bootout** first (see below), then bootstrap again:
+
+   ```bash
+   launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.snapname.watcher.plist
+   ```
+
+5. **Logs:** stdout and stderr go to `.snapname-launchd.out.log` and `.snapname-launchd.err.log` in the repo root (ignored by git).
+
+**Stop / uninstall:** `launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.snapname.watcher.plist`, then remove the plist from `LaunchAgents` if you no longer want it.
+
 Run stays in the foreground: it prints `ready`, the resolved folder, then `watching…`. When a **new macOS-style screenshot** appears (filename starts with `Screenshot` by default), it waits until the file size stops changing, asks the model for a short slug, then **renames** the file in place. It logs `renamed: /old/path -> /new/path` on success, or a message on **stderr** if the API key is missing, the API errors, or the rename fails. Stop with **Ctrl+C**.
 
 Set `SNAPNAME_ONLY_SCREENSHOT_PREFIX=0` to rename **every** new image in the watched folder (not only `Screenshot*`), e.g. if your system uses a different naming pattern.
