@@ -1,92 +1,84 @@
 # Snapname
 
-This application watches your screenshots folder, sends each new capture to a vision model, and renames the file to a short slug based on what’s in the image.
+Snapname watches a folder (by default **your Desktop**). When a new screenshot appears, it sends the image to an Anthropic vision model, gets back a short descriptive slug, and **renames the file in place**.
 
-## Requirements
+---
 
-- Python 3.11
+## Prerequisites
 
-## Setup
+- **Python 3.11 or newer** (`python3 --version`)
+- An **[Anthropic API key](https://console.anthropic.com/)** — stored locally in `.env`, never committed
+- **macOS** is the typical setup (screenshots land on Desktop by default). Other platforms work if you point `SNAPNAME_SCREENSHOTS_DIR` at an existing folder.
 
-From the **repository root** (the folder that contains `snapname/` and `pyproject.toml`):
+---
+
+## How to start
+
+Work from the **repository root** — the directory that contains `snapname/` and `pyproject.toml`.
 
 ```bash
+git clone https://github.com/jasmineyyip/snapname.git
+cd snapname
+
 python3 -m venv .venv
 source .venv/bin/activate
+
 pip install -r requirements.txt
+
+cp .env.example .env
+# Make sure in .env, set ANTHROPIC_API_KEY=...
+
 python -m snapname
 ```
 
-### Editable install and `snapname` on your PATH
+Run `source .venv/bin/activate` and `python` should work inside that shell.
 
-Same venv, from the repository root:
+You should see **`ready`**, the resolved watch folder, then **`watching…`**. Leave this terminal open while you use Snapname. You can terminate it with **Ctrl+C**.
 
-```bash
-pip install -e ".[dev]"
-```
+---
 
-That installs the package in editable mode, pulls dev extras (pytest), and adds a **`snapname`** executable next to `python` in the venv (`which snapname` should print something under `.venv/bin/`). Activate the venv in any terminal session where you want that command.
+## What happens while it runs
 
-To run without activating the venv: `.venv/bin/snapname`.
+1. Snapname watches **only the top level** of the configured folder.
+2. By default it only reacts to files whose name starts with **`Screenshot`** (macOS naming). To rename **every** new image in that folder, set `SNAPNAME_ONLY_SCREENSHOT_PREFIX=0` (see the table below).
+3. When a matching image appears, Snapname waits until the file size stabilizes, calls the model, then renames it.
+4. If it succeed, it prints: `renamed: /old/path -> /new/path`. Problems such as missing key, API errors, and rename failures will go to **stderr**.
 
-### Smoke test (real screenshot + API key)
+**Supported extensions:** `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.heic`, `.tiff`, `.tif`.
 
-1. Copy `.env.example` to `.env` and set **`ANTHROPIC_API_KEY`** (and optionally `SNAPNAME_SCREENSHOTS_DIR` if not using Desktop).
-2. Start the watcher: `python -m snapname` or `snapname` after `pip install -e .`.
-3. Confirm you see `ready`, the watched folder, then `watching…`.
-4. Take a **new** macOS screenshot (⌘⇧3 or ⌘⇧4) so the file name starts with **`Screenshot`** (unless you set `SNAPNAME_ONLY_SCREENSHOT_PREFIX=0`).
-5. Within a short wait, you should see **`renamed: /old/path -> /new/path`** and the file renamed on disk. If nothing happens, check **stderr** for API or permission errors.
+---
 
-### Run in the background (macOS Launch Agent)
+## Run in the background (macOS Launch Agent)
 
-Use a **Launch Agent** so Snapname starts at login and keeps running without an open terminal.
+Use a **Launch Agent** so Snapname starts at login without keeping a terminal open.
 
-1. From the repo root, create the venv, `pip install -e .`, and put **`ANTHROPIC_API_KEY`** (and any other vars) in **`.env`** as usual. Snapname loads `.env` from the repository root next to `pyproject.toml`.
+1. From the repo root: venv created, `pip install -e .` (or at least `pip install -r requirements.txt`), and **`.env`** with your key. Snapname loads `.env` from the repo root (next to `pyproject.toml`).
 2. Copy `launchd/com.snapname.watcher.example.plist` to `~/Library/LaunchAgents/com.snapname.watcher.plist`.
-3. Edit that plist and replace **every** `/ABSOLUTE/PATH/TO/snapname-repo` with the **real** absolute path to your clone (the folder that contains `.venv` and `snapname/`).
-4. Load the agent (run once per machine after installing or editing the plist). If you loaded it before and changed the plist, **bootout** first (see below), then bootstrap again:
+3. Edit the plist: replace **every** `/ABSOLUTE/PATH/TO/snapname-repo` with your **real** absolute path to the clone (folder that contains `.venv` and `snapname/`).
+4. Load the agent (after edits, **bootout** first if you loaded an older version):
 
    ```bash
    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.snapname.watcher.plist
    ```
 
-5. **Logs:** stdout and stderr go to `.snapname-launchd.out.log` and `.snapname-launchd.err.log` in the repo root (ignored by git).
+5. Logs: `.snapname-launchd.out.log` and `.snapname-launchd.err.log` in the repo root (gitignored).
 
-**Stop / uninstall:** `launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.snapname.watcher.plist`, then remove the plist from `LaunchAgents` if you no longer want it.
+**Stop / uninstall:** `launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.snapname.watcher.plist`, then delete the plist from `LaunchAgents` if you want it gone.
 
-Run stays in the foreground: it prints `ready`, the resolved folder, then `watching…`. When a **new macOS-style screenshot** appears (filename starts with `Screenshot` by default), it waits until the file size stops changing, asks the model for a short slug, then **renames** the file in place. It logs `renamed: /old/path -> /new/path` on success, or a message on **stderr** if the API key is missing, the API errors, or the rename fails. Stop with **Ctrl+C**.
-
-Set `SNAPNAME_ONLY_SCREENSHOT_PREFIX=0` to rename **every** new image in the watched folder (not only `Screenshot*`), e.g. if your system uses a different naming pattern.
-
-Supported extensions: `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.heic`, `.tiff`, `.tif`. Only the top level of the folder is watched (not subfolders).
+---
 
 ## Configuration
 
-Environment variables (optional unless noted). You can put them in a `.env` file in the repo root; copy `.env.example` to `.env`.
+Copy `.env.example` to `.env` in the repo root. Do **not** commit `.env`.
+
+Naming uses the **Anthropic Messages API** (image bytes are sent to the model).
 
 | Variable | Purpose |
 |----------|---------|
 | `SNAPNAME_SCREENSHOTS_DIR` | Folder to watch. Default: `~/Desktop`. Must exist. |
-| `ANTHROPIC_API_KEY` | Anthropic API key. Required to compute a name from image content (e.g. once renaming is enabled). |
+| `ANTHROPIC_API_KEY` | Required for renaming from image content. |
 | `SNAPNAME_MODEL` | Vision model id. Default: `claude-sonnet-4-20250514`. |
-| `SNAPNAME_FILENAME_PREFIX` | Optional string prepended to the generated slug (sanitized with the slug). |
-| `SNAPNAME_FILENAME_SUFFIX` | Optional string appended before the file extension (sanitized with the slug). |
-| `SNAPNAME_POLLING` | If `1` / `true` / `yes` / `on`, use a polling watcher instead of native FSEvents (higher CPU; useful if FSEvents fails). |
-| `SNAPNAME_ONLY_SCREENSHOT_PREFIX` | Default `1`: only process files whose name starts with `Screenshot`. Set to `0` / `false` / `off` to process all new images in the folder. |
-
-## macOS screenshots
-
-By default, macOS often saves captures to **Desktop** (`~/Desktop`). Snapname uses that path unless you set `SNAPNAME_SCREENSHOTS_DIR`.
-
-## API key
-
-Naming from image content uses the **Anthropic Messages API** (the image bytes are sent to the model). Set `ANTHROPIC_API_KEY` in `.env` for that path. Do not commit `.env`.
-
-### Naming API (for scripts)
-
-The package exposes helpers in `snapname.naming`:
-
-- `describe_image_slug(settings, path)` — vision call → sanitized slug (no extension).
-- `propose_new_path(settings, path)` — slug + prefix/suffix + collision handling → target `Path` (same folder, same extension). The watcher calls this then `Path.rename`.
-
-Both raise `NamingError` if the key is missing, the path is not a supported image, or the API errors.
+| `SNAPNAME_FILENAME_PREFIX` | Optional string before the slug (sanitized). |
+| `SNAPNAME_FILENAME_SUFFIX` | Optional string after the slug, before the extension (sanitized). |
+| `SNAPNAME_POLLING` | `1` / `true` / `yes` / `on` → polling watcher (more CPU; useful if native events misbehave). |
+| `SNAPNAME_ONLY_SCREENSHOT_PREFIX` | Default on: only files whose name starts with `Screenshot`. Set `0` / `false` / `off` for all new images in the folder. |
