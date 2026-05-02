@@ -2,15 +2,26 @@ from __future__ import annotations
 
 import base64
 import re
+from io import BytesIO
 from pathlib import Path
 
 import anthropic
+from PIL import Image, ImageOps
 
 from snapname.config import Settings
 from snapname.images import is_image_path
 
 MAX_SLUG_LENGTH = 80
 MAX_BASENAME_LENGTH = 120
+
+# Anthropic caps base64 image payloads at 5 MiB decoded size.
+ANTHROPIC_IMAGE_MAX_RAW_BYTES = 5 * 1024 * 1024
+
+
+def _anthropic_target_raw_bytes() -> int:
+    cap = ANTHROPIC_IMAGE_MAX_RAW_BYTES
+    headroom = min(256 * 1024, max(cap // 8, 4096))
+    return max(4096, cap - headroom)
 
 MEDIA_TYPE_BY_SUFFIX: dict[str, str] = {
     ".png": "image/png",
@@ -67,6 +78,84 @@ def sanitize_slug(s: str, max_len: int = MAX_SLUG_LENGTH) -> str:
     return s
 
 
+def _image_to_rgb_for_jpeg(img: Image.Image) -> Image.Image:
+    if img.mode == "P":
+        img = img.convert("RGBA")
+    if img.mode == "RGBA":
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[3])
+        return bg
+    if img.mode != "RGB":
+        return img.convert("RGB")
+    return img
+
+
+def _encode_jpeg(img: Image.Image, *, quality: int) -> bytes:
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+def _shrink_for_anthropic_vision(raw: bytes) -> tuple[bytes, str]:
+    """Return image bytes and media_type, under Anthropic's ~5 MiB decoded limit."""
+    try:
+        img = Image.open(BytesIO(raw))
+        img.load()
+    except OSError as exc:
+        raise NamingError(
+            "Screenshot is larger than 5 MB (Anthropic limit) and could not be read as an image. "
+            f"Details: {exc}"
+        ) from exc
+
+    img = ImageOps.exif_transpose(img)
+    rgb = _image_to_rgb_for_jpeg(img)
+
+    quality = 88
+    scale = 1.0
+    best: bytes | None = None
+
+    while quality >= 45 or scale >= 0.25:
+        work = rgb
+        if scale < 1.0:
+            w = max(1, int(rgb.width * scale))
+            h = max(1, int(rgb.height * scale))
+            work = rgb.resize((w, h), Image.Resampling.LANCZOS)
+
+        data = _encode_jpeg(work, quality=quality)
+        if len(data) <= _anthropic_target_raw_bytes():
+            return data, "image/jpeg"
+        best = data if best is None or len(data) < len(best) else best
+
+        if quality > 58:
+            quality -= 6
+        elif scale > 0.25:
+            scale *= 0.82
+            quality = min(quality + 4, 88)
+        else:
+            break
+
+    if best is not None and len(best) <= ANTHROPIC_IMAGE_MAX_RAW_BYTES:
+        return best, "image/jpeg"
+
+    tiny = rgb.resize(
+        (max(1, rgb.width // 4), max(1, rgb.height // 4)),
+        Image.Resampling.LANCZOS,
+    )
+    data = _encode_jpeg(tiny, quality=45)
+    if len(data) <= ANTHROPIC_IMAGE_MAX_RAW_BYTES:
+        return data, "image/jpeg"
+
+    raise NamingError(
+        "Could not shrink screenshot enough to stay under Anthropic's 5 MB image limit."
+    )
+
+
+def _bytes_for_vision_api(raw: bytes, media_type: str) -> tuple[bytes, str]:
+    if len(raw) <= ANTHROPIC_IMAGE_MAX_RAW_BYTES:
+        return raw, media_type
+    return _shrink_for_anthropic_vision(raw)
+
+
 def _response_text(message: object) -> str:
     parts: list[str] = []
     for block in message.content:
@@ -85,7 +174,8 @@ def describe_image_slug(settings: Settings, path: Path) -> str:
 
     media_type = media_type_for_path(path)
     raw_bytes = path.read_bytes()
-    b64 = base64.standard_b64encode(raw_bytes).decode("ascii")
+    payload_bytes, payload_media_type = _bytes_for_vision_api(raw_bytes, media_type)
+    b64 = base64.standard_b64encode(payload_bytes).decode("ascii")
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     try:
@@ -100,7 +190,7 @@ def describe_image_slug(settings: Settings, path: Path) -> str:
                             "type": "image",
                             "source": {
                                 "type": "base64",
-                                "media_type": media_type,
+                                "media_type": payload_media_type,
                                 "data": b64,
                             },
                         },
