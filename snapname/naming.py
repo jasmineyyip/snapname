@@ -97,7 +97,7 @@ def _encode_jpeg(img: Image.Image, *, quality: int) -> bytes:
 
 
 def _shrink_for_anthropic_vision(raw: bytes) -> tuple[bytes, str]:
-    """Return image bytes and media_type, under Anthropic's ~5 MiB decoded limit."""
+    """Return JPEG bytes under Anthropic's decoded 5 MiB cap (may downscale aggressively)."""
     try:
         img = Image.open(BytesIO(raw))
         img.load()
@@ -112,38 +112,29 @@ def _shrink_for_anthropic_vision(raw: bytes) -> tuple[bytes, str]:
 
     quality = 88
     scale = 1.0
-    best: bytes | None = None
+    target = _anthropic_target_raw_bytes()
 
-    while quality >= 45 or scale >= 0.25:
-        work = rgb
-        if scale < 1.0:
-            w = max(1, int(rgb.width * scale))
-            h = max(1, int(rgb.height * scale))
-            work = rgb.resize((w, h), Image.Resampling.LANCZOS)
-
-        data = _encode_jpeg(work, quality=quality)
-        if len(data) <= _anthropic_target_raw_bytes():
+    for _ in range(96):
+        w = max(1, int(rgb.width * scale))
+        h = max(1, int(rgb.height * scale))
+        work = rgb if (w, h) == (rgb.width, rgb.height) else rgb.resize(
+            (w, h), Image.Resampling.LANCZOS
+        )
+        q = max(28, min(quality, 95))
+        data = _encode_jpeg(work, quality=q)
+        if len(data) <= target:
             return data, "image/jpeg"
-        best = data if best is None or len(data) < len(best) else best
+        if len(data) <= ANTHROPIC_IMAGE_MAX_RAW_BYTES:
+            return data, "image/jpeg"
 
-        if quality > 58:
-            quality -= 6
-        elif scale > 0.25:
-            scale *= 0.82
-            quality = min(quality + 4, 88)
+        if quality > 42:
+            quality -= 5
         else:
+            scale *= 0.72
+            quality = min(quality + 10, 88)
+
+        if w <= 64 and h <= 64 and quality <= 30:
             break
-
-    if best is not None and len(best) <= ANTHROPIC_IMAGE_MAX_RAW_BYTES:
-        return best, "image/jpeg"
-
-    tiny = rgb.resize(
-        (max(1, rgb.width // 4), max(1, rgb.height // 4)),
-        Image.Resampling.LANCZOS,
-    )
-    data = _encode_jpeg(tiny, quality=45)
-    if len(data) <= ANTHROPIC_IMAGE_MAX_RAW_BYTES:
-        return data, "image/jpeg"
 
     raise NamingError(
         "Could not shrink screenshot enough to stay under Anthropic's 5 MB image limit."
@@ -175,6 +166,8 @@ def describe_image_slug(settings: Settings, path: Path) -> str:
     media_type = media_type_for_path(path)
     raw_bytes = path.read_bytes()
     payload_bytes, payload_media_type = _bytes_for_vision_api(raw_bytes, media_type)
+    if len(payload_bytes) > ANTHROPIC_IMAGE_MAX_RAW_BYTES:
+        payload_bytes, payload_media_type = _shrink_for_anthropic_vision(raw_bytes)
     b64 = base64.standard_b64encode(payload_bytes).decode("ascii")
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
