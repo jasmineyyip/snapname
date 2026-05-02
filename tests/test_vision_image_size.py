@@ -58,3 +58,31 @@ def test_oversize_non_image_bytes_raises(tmp_path: Path, monkeypatch: pytest.Mon
     p.write_bytes(b"not-a-real-png-" + b"z" * 500)
     with pytest.raises(NamingError, match="could not be read"):
         describe_image_slug(_settings(tmp_path), p)
+
+
+def test_huge_dimensions_small_png_still_jpeg_for_raster_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """File can be under the byte cap while decoded pixels exceed API raster limits."""
+    monkeypatch.setattr(naming, "ANTHROPIC_IMAGE_MAX_RAW_BYTES", 9_000_000)
+    monkeypatch.setattr(naming, "ANTHROPIC_MAX_PIXELS_RGBA", 80_000)
+
+    img = Image.new("RGB", (400, 400), color=(40, 41, 42))
+    buf = tmp_path / "dense-ish.png"
+    img.save(buf, format="PNG", compress_level=9)
+    assert buf.stat().st_size < naming.ANTHROPIC_IMAGE_MAX_RAW_BYTES
+    assert 400 * 400 > naming.ANTHROPIC_MAX_PIXELS_RGBA
+
+    fake_message = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="tiny-grid-slug")]
+    )
+    with patch("snapname.naming.anthropic.Anthropic") as MockAnthropic:
+        instance = MockAnthropic.return_value
+        instance.messages.create.return_value = fake_message
+        slug = describe_image_slug(_settings(tmp_path), buf)
+
+    assert slug == "tiny-grid-slug"
+    block = instance.messages.create.call_args.kwargs["messages"][0]["content"][0]
+    assert block["source"]["media_type"] == "image/jpeg"
+    decoded = base64.standard_b64decode(block["source"]["data"])
+    assert len(decoded) <= naming.ANTHROPIC_IMAGE_MAX_RAW_BYTES

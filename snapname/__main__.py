@@ -1,5 +1,7 @@
+import os
 import sys
 
+from snapname import __version__
 from snapname.config import ConfigError, load_settings
 from snapname.watcher import run_observer
 
@@ -11,7 +13,16 @@ def main() -> None:
         print(exc, file=sys.stderr)
         raise SystemExit(1) from exc
 
-    print("ready", flush=True)
+    print(f"ready — snapname {__version__}", flush=True)
+    if os.environ.get("SNAPNAME_SHOW_LOAD_PATH", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        import snapname.naming as naming_mod
+
+        print(f"naming module: {naming_mod.__file__}", flush=True)
     print(f"screenshots: {settings.screenshots_dir}", flush=True)
     if not settings.anthropic_api_key:
         print(

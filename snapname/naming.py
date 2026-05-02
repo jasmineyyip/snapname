@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import math
 import re
+import sys
 from io import BytesIO
 from pathlib import Path
 
@@ -16,6 +18,9 @@ MAX_BASENAME_LENGTH = 120
 
 # Anthropic caps base64 image payloads at 5 MiB decoded size.
 ANTHROPIC_IMAGE_MAX_RAW_BYTES = 5 * 1024 * 1024
+
+# The API also rejects large decoded rasters (errors match width×height×4-byte buffers).
+ANTHROPIC_MAX_PIXELS_RGBA = max(1, ANTHROPIC_IMAGE_MAX_RAW_BYTES // 4 - 512)
 
 
 def _anthropic_target_raw_bytes() -> int:
@@ -96,6 +101,34 @@ def _encode_jpeg(img: Image.Image, *, quality: int) -> bytes:
     return buf.getvalue()
 
 
+def _limit_raster_for_api(rgb: Image.Image) -> Image.Image:
+    """Scale down so width×height×4 fits Anthropic's ~5 MiB raster limit."""
+    w, h = rgb.size
+    if w * h <= ANTHROPIC_MAX_PIXELS_RGBA:
+        return rgb
+    scale = math.sqrt(ANTHROPIC_MAX_PIXELS_RGBA / (w * h)) * 0.995
+    nw = max(1, int(w * scale))
+    nh = max(1, int(h * scale))
+    while nw * nh > ANTHROPIC_MAX_PIXELS_RGBA and (nw > 1 or nh > 1):
+        if nw >= nh and nw > 1:
+            nw -= 1
+        elif nh > 1:
+            nh -= 1
+        else:
+            break
+    return rgb.resize((nw, nh), Image.Resampling.LANCZOS)
+
+
+def _image_exceeds_api_raster_cap(raw: bytes) -> bool:
+    try:
+        img = Image.open(BytesIO(raw))
+        img.load()
+    except OSError:
+        return False
+    img = ImageOps.exif_transpose(img)
+    return img.width * img.height > ANTHROPIC_MAX_PIXELS_RGBA
+
+
 def _shrink_for_anthropic_vision(raw: bytes) -> tuple[bytes, str]:
     """Return JPEG bytes under Anthropic's decoded 5 MiB cap (may downscale aggressively)."""
     try:
@@ -108,7 +141,7 @@ def _shrink_for_anthropic_vision(raw: bytes) -> tuple[bytes, str]:
         ) from exc
 
     img = ImageOps.exif_transpose(img)
-    rgb = _image_to_rgb_for_jpeg(img)
+    rgb = _limit_raster_for_api(_image_to_rgb_for_jpeg(img))
 
     quality = 88
     scale = 1.0
@@ -142,7 +175,9 @@ def _shrink_for_anthropic_vision(raw: bytes) -> tuple[bytes, str]:
 
 
 def _bytes_for_vision_api(raw: bytes, media_type: str) -> tuple[bytes, str]:
-    if len(raw) <= ANTHROPIC_IMAGE_MAX_RAW_BYTES:
+    if len(raw) <= ANTHROPIC_IMAGE_MAX_RAW_BYTES and not _image_exceeds_api_raster_cap(
+        raw
+    ):
         return raw, media_type
     return _shrink_for_anthropic_vision(raw)
 
@@ -165,9 +200,21 @@ def describe_image_slug(settings: Settings, path: Path) -> str:
 
     media_type = media_type_for_path(path)
     raw_bytes = path.read_bytes()
+    if len(raw_bytes) > ANTHROPIC_IMAGE_MAX_RAW_BYTES:
+        print(
+            f"snapname: compressing {len(raw_bytes)}-byte image for API (5 MiB limit)…",
+            file=sys.stderr,
+            flush=True,
+        )
     payload_bytes, payload_media_type = _bytes_for_vision_api(raw_bytes, media_type)
     if len(payload_bytes) > ANTHROPIC_IMAGE_MAX_RAW_BYTES:
         payload_bytes, payload_media_type = _shrink_for_anthropic_vision(raw_bytes)
+    if len(payload_bytes) > ANTHROPIC_IMAGE_MAX_RAW_BYTES:
+        raise NamingError(
+            f"Refusing API call: image payload is still {len(payload_bytes)} bytes (> 5 MiB). "
+            f"This build should shrink large screenshots; loaded naming.py from {__file__}. "
+            "Re-run from the repo you edited with `pip install -e .` and use this venv's python."
+        )
     b64 = base64.standard_b64encode(payload_bytes).decode("ascii")
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -193,6 +240,13 @@ def describe_image_slug(settings: Settings, path: Path) -> str:
             ],
         )
     except anthropic.APIError as exc:
+        err_text = str(exc)
+        if "exceeds 5 MB" in err_text or "5242880" in err_text:
+            raise NamingError(
+                f"Anthropic API error: {exc}\n"
+                "If this persists after upgrading snapname, report it with screenshot dimensions "
+                f"and snapname version; naming.py: {__file__}"
+            ) from exc
         raise NamingError(f"Anthropic API error: {exc}") from exc
 
     raw = _response_text(message)
