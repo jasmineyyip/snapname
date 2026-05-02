@@ -13,9 +13,15 @@ def main() -> None:
 
     print("ready", flush=True)
     print(f"screenshots: {settings.screenshots_dir}", flush=True)
-    print("watching (Ctrl+C to stop)…", flush=True)
+    if not settings.anthropic_api_key:
+        print(
+            "warning: ANTHROPIC_API_KEY is not set; renames will fail until you add it to .env.",
+            file=sys.stderr,
+            flush=True,
+        )
     try:
-        run_observer(settings.screenshots_dir)
+        print("watching (Ctrl+C to stop)…", flush=True)
+        run_observer(settings)
     except KeyboardInterrupt:
         print("\nstopped", flush=True)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -10,7 +11,9 @@ from watchdog.observers import Observer
 from watchdog.observers.api import BaseObserver
 from watchdog.observers.polling import PollingObserver
 
+from snapname.config import Settings
 from snapname.images import is_image_path
+from snapname.naming import NamingError, propose_new_path
 
 
 def wait_until_stable(
@@ -60,8 +63,9 @@ def wait_until_stable(
 
 
 class _ScreenshotFolderHandler(FileSystemEventHandler):
-    def __init__(self, watch_root: Path) -> None:
-        self._watch_root = watch_root.resolve()
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._watch_root = settings.screenshots_dir.resolve()
         self._lock = threading.Lock()
         self._in_flight: set[Path] = set()
 
@@ -85,6 +89,8 @@ class _ScreenshotFolderHandler(FileSystemEventHandler):
             return
         if not is_image_path(path):
             return
+        if self._settings.only_screenshot_prefix and not path.name.startswith("Screenshot"):
+            return
 
         with self._lock:
             if path in self._in_flight:
@@ -101,8 +107,22 @@ class _ScreenshotFolderHandler(FileSystemEventHandler):
 
     def _process(self, path: Path) -> None:
         try:
-            if wait_until_stable(path):
-                print(f"detected: {path}", flush=True)
+            if not wait_until_stable(path):
+                return
+            if not path.is_file():
+                return
+            if self._settings.only_screenshot_prefix and not path.name.startswith("Screenshot"):
+                return
+            src = path
+            target = propose_new_path(self._settings, src)
+            if target.resolve() == src.resolve():
+                return
+            src.rename(target)
+            print(f"renamed: {src} -> {target}", flush=True)
+        except NamingError as exc:
+            print(f"snapname: {path}: {exc}", file=sys.stderr, flush=True)
+        except OSError as exc:
+            print(f"snapname: {path}: {exc}", file=sys.stderr, flush=True)
         finally:
             with self._lock:
                 self._in_flight.discard(path)
@@ -115,9 +135,9 @@ def _observer() -> BaseObserver:
     return Observer()
 
 
-def run_observer(watch_dir: Path) -> None:
-    watch_dir = watch_dir.resolve()
-    handler = _ScreenshotFolderHandler(watch_dir)
+def run_observer(settings: Settings) -> None:
+    watch_dir = settings.screenshots_dir.resolve()
+    handler = _ScreenshotFolderHandler(settings)
     observer = _observer()
     observer.schedule(handler, str(watch_dir), recursive=False)
     observer.start()

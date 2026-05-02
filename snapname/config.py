@@ -14,6 +14,7 @@ class Settings:
     screenshots_dir: Path
     filename_prefix: str
     filename_suffix: str
+    only_screenshot_prefix: bool
 
 
 class ConfigError(Exception):
@@ -29,6 +30,15 @@ def _load_dotenv_files() -> None:
     load_dotenv(Path.cwd() / ".env", override=True)
 
 
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    return default
+
+
 def load_settings() -> Settings:
     _load_dotenv_files()
 
@@ -37,6 +47,7 @@ def load_settings() -> Settings:
     raw_dir = os.environ.get("SNAPNAME_SCREENSHOTS_DIR", "").strip()
     prefix = os.environ.get("SNAPNAME_FILENAME_PREFIX", "").strip()
     suffix = os.environ.get("SNAPNAME_FILENAME_SUFFIX", "").strip()
+    only_shot = _env_bool("SNAPNAME_ONLY_SCREENSHOT_PREFIX", default=True)
 
     if raw_dir:
         screenshots = Path(raw_dir).expanduser().resolve()
@@ -56,4 +67,5 @@ def load_settings() -> Settings:
         screenshots_dir=screenshots,
         filename_prefix=prefix,
         filename_suffix=suffix,
+        only_screenshot_prefix=only_shot,
     )
